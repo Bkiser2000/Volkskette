@@ -12,6 +12,7 @@
 #include <sstream>
 #include <iomanip>
 #include <nlohmann/json.hpp>
+#include <map>
 
 using json = nlohmann::json;
 
@@ -23,18 +24,52 @@ public:
     const char* what() const noexcept override { return message.c_str(); }
 };
 
+struct KeyPair {
+    std::string public_key;
+    std::string private_key;
+
+    static KeyPair generate();
+    static std::string public_key_to_address(const std::string& public_key);
+};
+
 struct Transaction {
     std::string from;
     std::string to;
     double amount;
+    double gas_price;
     std::string timestamp;
+    std::string signature;
+    std::string public_key;
+    std::string transaction_id;
 
     json to_json() const {
         json j;
         j["from"] = from;
         j["to"] = to;
         j["amount"] = amount;
+        j["gas_price"] = gas_price;
         j["timestamp"] = timestamp;
+        j["signature"] = signature;
+        j["public_key"] = public_key;
+        j["transaction_id"] = transaction_id;
+        return j;
+    }
+    std::string calculate_hash() const;
+};
+
+const double BLOCK_REWARD = 50.0;
+const double GAS_REWARD_PERCENTAGE = 0.9;
+
+struct MinerStats {
+    std::string address;
+    long long blocks_mined = 0;
+    double total_rewards = 0.0;
+
+    json to_json() const {
+        json j;
+        j["address"] = address;
+        j["blocks_mined"] = blocks_mined;
+        j["total_rewards"] = total_rewards;
         return j;
     }
 };
@@ -69,6 +104,10 @@ private:
     mutable std::mutex chain_mutex;
     int difficulty;
 
+    std::map<std::string, double> account_balances;
+
+    std::map<std::string, MinerStats> miner_stats;
+
     Block _create_block(const std::vector<Transaction>& transactions, 
                        long long proof,
                        const std::string& previous_hash, 
@@ -88,10 +127,38 @@ private:
 
     int _calculate_difficulty() const;
 
+    bool _verify_signature(const Transaction& tx) const;
+
+    bool _validate_transaction(const Transaction& tx) const;
+
+    bool _has_sufficient_balance(const std::string& address, double amount) const;
+
+    void _update_balances(const std::vector<Transaction>& transactions);
+
 public:
     Blockchain();
 
+    static constexpr double INITIAL_BALANCE = 100.0;
+
+    void create_account(const std::string& address, double initial_balance = INITIAL_BALANCE);
+
+    double get_balance(const std::string& address) const;
+
+    std::map<std::string, double> get_all_balances() const;
+
     void add_transaction(const Transaction& tx);
+
+    Transaction create_transaction(const std::string& from,
+                                  const std::string& to,
+                                  double amount,
+                                  double gas_price,
+                                  const std::string& private_key);
+
+    Transaction create_coinbase_transaction(const std::string& miner_address, int block_index);
+
+    void record_miner_reward(const std::string& miner_address, double reward);
+
+    double get_miner_total_rewards(const std::string& miner_address) const;
 
     Block mine_block(int max_transactions = 10);
 
@@ -100,6 +167,8 @@ public:
     bool is_chain_valid() const;
 
     std::vector<Block> get_chain() const;
+
+    std::map<std::string, MinerStats> get_all_miner_stats() const;
 
     json get_chain_json() const;
 
