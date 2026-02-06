@@ -1,0 +1,36 @@
+# Build files
+build/
+cmake_install.cmake
+CMakeCache.txt
+CMakeFiles/
+*.o
+*.a
+*.so
+*.dylib
+*.exe
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Dependencies/Libraries
+include/boost/
+venv/
+
+# Data files
+blockchain_data/
+*.json
+*.db
+*.log
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
