@@ -2,6 +2,7 @@
 #include <chrono>
 #include <algorithm>
 #include <cstring>
+#include <ctime>
 #include <fstream>
 #include <openssl/rand.h>
 #include <openssl/bn.h>
@@ -156,15 +157,101 @@ std::string Blockchain::_calculate_state_root() const {
     return sha256(state_dump);
 }
 
-// ============= DIFFICULTY ============="
+// ============= DIFFICULTY TARGETING =============
 int Blockchain::_calculate_difficulty() const {
     std::lock_guard<std::mutex> lock(chain_mutex);
     
-    if (chain.size() < 10) {
-        return 4;
+    // Not enough blocks for retargeting
+    if (chain.size() < DIFFICULTY_RETARGET_INTERVAL + 1) {
+        return 4;  // Start with 4 leading zeros
     }
-
-    return 4 + (chain.size() / 100);
+    
+    // Check if this is a retarget block (every DIFFICULTY_RETARGET_INTERVAL blocks)
+    if (chain.size() % DIFFICULTY_RETARGET_INTERVAL != 0) {
+        return difficulty;  // Keep current difficulty
+    }
+    
+    // Calculate actual time taken for DIFFICULTY_RETARGET_INTERVAL blocks
+    // Get timestamps of the retarget window: [start_block, end_block]
+    int end_block_index = chain.size() - 1;
+    int start_block_index = end_block_index - DIFFICULTY_RETARGET_INTERVAL;
+    
+    if (start_block_index < 0) {
+        return difficulty;
+    }
+    
+    const Block& start_block = chain[start_block_index];
+    const Block& end_block = chain[end_block_index];
+    
+    // Parse timestamps to get actual time difference
+    std::tm start_tm = {};
+    std::tm end_tm = {};
+    
+    int result1 = sscanf(start_block.timestamp.c_str(), "%d-%d-%d %d:%d:%d",
+                        &start_tm.tm_year, &start_tm.tm_mon, &start_tm.tm_mday,
+                        &start_tm.tm_hour, &start_tm.tm_min, &start_tm.tm_sec);
+    
+    int result2 = sscanf(end_block.timestamp.c_str(), "%d-%d-%d %d:%d:%d",
+                        &end_tm.tm_year, &end_tm.tm_mon, &end_tm.tm_mday,
+                        &end_tm.tm_hour, &end_tm.tm_min, &end_tm.tm_sec);
+    
+    if (result1 != 6 || result2 != 6) {
+        LOG_WARN("Blockchain", "Could not parse block timestamps for difficulty adjustment");
+        return difficulty;
+    }
+    
+    // Normalize for mktime
+    start_tm.tm_year -= 1900;
+    start_tm.tm_mon -= 1;
+    start_tm.tm_isdst = -1;
+    
+    end_tm.tm_year -= 1900;
+    end_tm.tm_mon -= 1;
+    end_tm.tm_isdst = -1;
+    
+    time_t start_time = std::mktime(&start_tm);
+    time_t end_time = std::mktime(&end_tm);
+    
+    int64_t actual_time = end_time - start_time;
+    int64_t target_time = DIFFICULTY_RETARGET_INTERVAL * TARGET_BLOCK_TIME;  // Desired total time
+    
+    // Clamp adjustment ratio to prevent extreme jumps (max 4x change per retarget)
+    int64_t min_adjustment_time = target_time / 4;
+    int64_t max_adjustment_time = target_time * 4;
+    
+    if (actual_time < min_adjustment_time) {
+        actual_time = min_adjustment_time;
+    } else if (actual_time > max_adjustment_time) {
+        actual_time = max_adjustment_time;
+    }
+    
+    // Calculate new difficulty: more leading zeros = harder
+    // actual_time / target_time ratio:
+    // - If < 1: blocks too fast, increase difficulty
+    // - If > 1: blocks too slow, decrease difficulty
+    
+    int new_difficulty = difficulty;
+    
+    // For simplicity: adjust by ±1 per retarget if significantly off target
+    if (actual_time < target_time * 0.75) {
+        // Blocks 25%+ faster than target: increase difficulty
+        new_difficulty = std::min(16, difficulty + 1);  // Cap at 16 leading zeros
+        LOG_INFO("Blockchain", "Difficulty increased to " + std::to_string(new_difficulty) + 
+                 " (blocks too fast: " + std::to_string(actual_time) + "s vs target " + 
+                 std::to_string(target_time) + "s)");
+    } else if (actual_time > target_time * 1.25) {
+        // Blocks 25%+ slower than target: decrease difficulty
+        new_difficulty = std::max(1, difficulty - 1);  // Don't go below 1 leading zero
+        LOG_INFO("Blockchain", "Difficulty decreased to " + std::to_string(new_difficulty) + 
+                 " (blocks too slow: " + std::to_string(actual_time) + "s vs target " + 
+                 std::to_string(target_time) + "s)");
+    } else {
+        LOG_DEBUG("Blockchain", "Difficulty maintained at " + std::to_string(difficulty) + 
+                 " (blocks on target: " + std::to_string(actual_time) + "s vs target " + 
+                 std::to_string(target_time) + "s)");
+    }
+    
+    return new_difficulty;
 }
 
 // ============= INITIALIZATION =============
