@@ -15,6 +15,7 @@ void print_header(const std::string& text) {
 void print_network_status(NetworkManager* network) {
     auto heights = network->get_chain_heights();
     auto sync_status = network->get_sync_status();
+    auto state_roots = network->get_state_roots();
     
     std::cout << "\n📊 Network Status:\n";
     std::cout << "   Network Height: " << network->get_network_height() << " blocks\n";
@@ -22,8 +23,14 @@ void print_network_status(NetworkManager* network) {
     for (const auto& [node_id, height] : heights) {
         bool synced = sync_status[node_id];
         std::string status = synced ? "✓ SYNCED" : "⚠ BEHIND";
-        std::cout << "   " << node_id << ": " << height << " blocks [" << status << "]\n";
+        std::string state_root = state_roots.count(node_id) ? state_roots.at(node_id).substr(0, 16) : "?";
+        std::cout << "   " << node_id << ": " << height << " blocks [" << status << "] state: " << state_root << "...\n";
     }
+    
+    // Check state synchronization (Phase 4.2)
+    bool all_state_synced = network->is_state_synced();
+    std::string state_sync_status = all_state_synced ? "✓ IN SYNC" : "⚠ OUT OF SYNC";
+    std::cout << "   State Sync: " << state_sync_status << "\n";
     
     std::cout << std::endl;
 }

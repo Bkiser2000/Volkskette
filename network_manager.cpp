@@ -109,6 +109,7 @@ void NetworkManager::run_consensus_monitor() {
         
         try {
             sync_chains();
+            sync_states();  // Phase 4.2: Synchronize account states
         } catch (const std::exception& e) {
             LOG_ERROR("NetworkManager", "Error in consensus monitor: " + std::string(e.what()));
         }
@@ -251,3 +252,71 @@ std::vector<Block> NetworkManager::resolve_fork(const std::vector<std::vector<Bl
     LOG_INFO("NetworkManager", "Resolved fork: selected chain with " + std::to_string(longest_chain.size()) + " blocks");
     return longest_chain;
 }
+
+// ============= STATE SYNCHRONIZATION (Phase 4.2) =============
+
+void NetworkManager::sync_states() {
+    auto all_nodes = get_all_nodes();
+    if (all_nodes.size() < 2) return;
+    
+    // Each node requests state from peers and verifies convergence
+    for (auto node : all_nodes) {
+        for (auto peer_node : all_nodes) {
+            if (node == peer_node) continue;
+            
+            // Node requests state from peer
+            node->request_state_sync(peer_node->get_node_id());
+            
+            // Immediately handle the response (simulated in-memory)
+            json peer_state = json::object();
+            auto peer_state_data = peer_node->get_blockchain().get_account_state();
+            std::string peer_state_root = peer_node->get_state_root();
+            
+            peer_state["state_root"] = peer_state_root;
+            peer_state["block_height"] = peer_node->get_blockchain().get_chain().size();
+            peer_state["node_id"] = peer_node->get_node_id();
+            
+            json accounts = json::object();
+            for (const auto& [addr, data] : peer_state_data) {
+                const auto& [balance, nonce] = data;
+                accounts[addr] = {
+                    {"balance", balance},
+                    {"nonce", nonce}
+                };
+            }
+            peer_state["accounts"] = accounts;
+            
+            // Node verifies the response
+            node->handle_state_sync_response(peer_state, peer_node->get_node_id());
+        }
+    }
+}
+
+bool NetworkManager::is_state_synced() const {
+    auto all_nodes = get_all_nodes();
+    if (all_nodes.size() < 2) return true;
+    
+    // Get first node's state root as reference
+    std::string reference_state_root = all_nodes[0]->get_state_root();
+    
+    // Check if all nodes have the same state root
+    for (auto node : all_nodes) {
+        if (node->get_state_root() != reference_state_root) {
+            return false;
+        }
+    }
+    
+    return true;
+}
+
+std::map<std::string, std::string> NetworkManager::get_state_roots() const {
+    std::map<std::string, std::string> roots;
+    auto all_nodes = get_all_nodes();
+    
+    for (auto node : all_nodes) {
+        roots[node->get_node_id()] = node->get_state_root();
+    }
+    
+    return roots;
+}
+

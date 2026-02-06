@@ -278,6 +278,80 @@ void BlockchainNode::handle_chain_sync(const std::vector<Block>& incoming_chain)
     }
 }
 
+// ============= STATE SYNCHRONIZATION (Phase 4.2) =============
+
+void BlockchainNode::request_state_sync(const std::string& peer_id) {
+    NetworkMessage msg;
+    msg.type = MessageType::STATE_SYNC_REQUEST;
+    msg.sender_id = node_id_;
+    msg.payload = node_id_;
+    
+    LOG_DEBUG("BlockchainNode", "Requesting state sync from peer: " + peer_id);
+    std::cout << "[" << node_id_ << "] Requesting state sync from: " << peer_id << std::endl;
+}
+
+void BlockchainNode::handle_state_sync_request(const std::string& peer_id) {
+    // Get current state snapshot and send to peer
+    std::lock_guard<std::mutex> lock(blockchain_mutex_);
+    
+    auto state = blockchain_.get_account_state();
+    std::string state_root = blockchain_.get_state_root();
+    
+    json state_json = json::object();
+    state_json["state_root"] = state_root;
+    state_json["block_height"] = blockchain_.get_chain().size();
+    state_json["node_id"] = node_id_;
+    
+    // Serialize account state
+    json accounts = json::object();
+    for (const auto& [addr, data] : state) {
+        const auto& [balance, nonce] = data;
+        accounts[addr] = {
+            {"balance", balance},
+            {"nonce", nonce}
+        };
+    }
+    state_json["accounts"] = accounts;
+    
+    NetworkMessage response;
+    response.type = MessageType::STATE_SYNC_RESPONSE;
+    response.sender_id = node_id_;
+    response.payload = state_json.dump();
+    
+    LOG_INFO("BlockchainNode", "Responding to state sync request from " + peer_id + 
+             " with " + std::to_string(state.size()) + " accounts, state_root: " + state_root.substr(0, 16));
+    std::cout << "[" << node_id_ << "] STATE SYNC RESPONSE -> " << peer_id 
+              << " (" << state.size() << " accounts, root: " << state_root.substr(0, 16) << "...)" << std::endl;
+}
+
+void BlockchainNode::handle_state_sync_response(const json& state_data, const std::string& peer_id) {
+    std::lock_guard<std::mutex> lock(blockchain_mutex_);
+    
+    // Extract state information from peer
+    std::string peer_state_root = state_data["state_root"].get<std::string>();
+    std::string peer_node_id = state_data["node_id"].get<std::string>();
+    int peer_block_height = state_data["block_height"].get<int>();
+    
+    // Get local state
+    std::string local_state_root = blockchain_.get_state_root();
+    auto local_state = blockchain_.get_account_state();
+    int local_block_height = blockchain_.get_chain().size();
+    
+    // Compare state roots
+    if (peer_state_root == local_state_root) {
+        LOG_INFO("BlockchainNode", "State sync verified ✓ with " + peer_id + 
+                 " (root: " + local_state_root.substr(0, 16) + "..., height: " + 
+                 std::to_string(local_block_height) + ")");
+        std::cout << "[" << node_id_ << "] State Synchronization: ✓ IN SYNC with " << peer_id 
+                  << " (height: " << local_block_height << ", root: " << local_state_root.substr(0, 16) << "...)" << std::endl;
+    } else {
+        LOG_WARN("BlockchainNode", "State divergence detected with " + peer_id + 
+                 " Local: " + local_state_root.substr(0, 16) + " Remote: " + peer_state_root.substr(0, 16));
+        std::cout << "[" << node_id_ << "] State Synchronization: ⚠️  OUT OF SYNC with " << peer_id 
+                  << " (Local root: " << local_state_root.substr(0, 16) << "... vs Remote: " << peer_state_root.substr(0, 16) << "...)" << std::endl;
+    }
+}
+
 void BlockchainNode::handle_handshake(const NetworkMessage& msg, const std::string& peer_address) {
     std::cout << "[" << node_id_ << "] Received handshake from: " << msg.sender_id << std::endl;
     add_peer(msg.sender_id, peer_address);

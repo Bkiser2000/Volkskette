@@ -35,6 +35,10 @@ public:
     bool is_network_synced(int max_height_diff = 0) const;
     void wait_for_sync(int timeout_seconds = 30);
     
+    // State synchronization (Phase 4.2)
+    bool is_state_synced() const;
+    std::map<std::string, std::string> get_state_roots() const;
+    
     // Network statistics
     int get_network_height() const;
     std::map<std::string, int> get_chain_heights() const;
@@ -50,6 +54,7 @@ private:
     // Consensus helper
     void run_consensus_monitor();
     void sync_chains();
+    void sync_states();  // Phase 4.2: Synchronize account states
     std::vector<Block> resolve_fork(const std::vector<std::vector<Block>>& competing_chains);
 };
 

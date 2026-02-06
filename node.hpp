@@ -22,7 +22,9 @@ enum class MessageType : uint8_t {
     SYNC_REQUEST = 5,
     SYNC_RESPONSE = 6,
     PEER_LIST = 7,
-    ACK = 8
+    ACK = 8,
+    STATE_SYNC_REQUEST = 9,    // Phase 4.2: Request account state snapshot
+    STATE_SYNC_RESPONSE = 10   // Phase 4.2: Response with account state
 };
 
 // Network message structure
@@ -98,6 +100,12 @@ public:
     // Synchronization
     void request_chain_sync(const std::string& peer_id);
     void handle_chain_sync(const std::vector<Block>& incoming_chain);
+    
+    // State Synchronization (Phase 4.2)
+    void request_state_sync(const std::string& peer_id);
+    void handle_state_sync_request(const std::string& peer_id);
+    void handle_state_sync_response(const json& state_data, const std::string& peer_id);
+    std::string get_state_root() const { return blockchain_.get_state_root(); }
     
     // Peer management
     void add_peer(const std::string& peer_id, const std::string& address);
