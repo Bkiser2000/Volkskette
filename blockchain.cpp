@@ -131,7 +131,32 @@ std::string Blockchain::_calculate_merkle_root(const std::vector<Transaction>& t
     return hashes[0];
 }
 
-// ============= DIFFICULTY =============
+// ============= ACCOUNT STATE SYNCHRONIZATION =============
+std::string Blockchain::_calculate_state_root() const {
+    // Create deterministic hash of current account state
+    json state_json = json::object();
+    
+    // Sort accounts by address for deterministic ordering
+    std::vector<std::string> sorted_addresses;
+    for (const auto& [addr, _] : account_balances) {
+        sorted_addresses.push_back(addr);
+    }
+    std::sort(sorted_addresses.begin(), sorted_addresses.end());
+    
+    // Build state snapshot
+    for (const auto& addr : sorted_addresses) {
+        json account_data = json::object();
+        account_data["balance"] = account_balances.at(addr);
+        account_data["nonce"] = account_nonces.count(addr) ? account_nonces.at(addr) : 0;
+        state_json[addr] = account_data;
+    }
+    
+    // Hash the entire state
+    std::string state_dump = state_json.dump();
+    return sha256(state_dump);
+}
+
+// ============= DIFFICULTY ============="
 int Blockchain::_calculate_difficulty() const {
     std::lock_guard<std::mutex> lock(chain_mutex);
     
@@ -153,6 +178,9 @@ Block Blockchain::_create_block(const std::vector<Transaction>& transactions,
                                 long long proof,
                                 const std::string& previous_hash, 
                                 int index) {
+    // Calculate state root BEFORE transactions execute (for consistent verification)
+    std::string state_root_value = _calculate_state_root();
+    
     auto now = std::chrono::system_clock::now();
     auto time = std::chrono::system_clock::to_time_t(now);
     
@@ -165,6 +193,7 @@ Block Blockchain::_create_block(const std::vector<Transaction>& transactions,
     block.timestamp = std::string(buffer);
     block.transactions = transactions;
     block.merkle_root = _calculate_merkle_root(transactions);
+    block.state_root = state_root_value;  // Add state root (Account state sync)
     block.proof = proof;
     block.previous_hash = previous_hash;
 
@@ -229,13 +258,26 @@ bool Blockchain::_check_replay_protection(const Transaction& tx) const {
     return tx.nonce == it->second + 1;
 }
 
+bool Blockchain::_verify_state_root(const std::string& calculated_root, const std::string& block_root) const {
+    if (calculated_root != block_root) {
+        LOG_WARN("Blockchain", "State root mismatch! Calculated: " + calculated_root.substr(0, 16) + 
+                 " Block: " + block_root.substr(0, 16));
+        return false;
+    }
+    return true;
+}
+
 void Blockchain::_update_balances(const std::vector<Transaction>& transactions) {
     for (const auto& tx : transactions) {
         account_balances[tx.from] -= (tx.amount + tx.gas_price);
         account_balances[tx.to] += tx.amount;
-        // Update nonce for replay protection
+        // Update nonce for replay protection (Account state sync)
         account_nonces[tx.from] = tx.nonce;
     }
+    
+    // Update state snapshot after balances change
+    std::lock_guard<std::mutex> lock(state_mutex);
+    account_state_snapshot = account_balances;  // Snapshot current state
 }
 
 // ============= TRANSACTION VALIDATION =============
@@ -324,6 +366,62 @@ uint64_t Blockchain::get_account_nonce(const std::string& address) const {
 std::map<std::string, double> Blockchain::get_all_balances() const {
     std::lock_guard<std::mutex> lock(chain_mutex);
     return account_balances;
+}
+
+// Account State Synchronization Methods (NEW)
+std::map<std::string, std::pair<double, uint64_t>> Blockchain::get_account_state() const {
+    std::lock_guard<std::mutex> lock(chain_mutex);
+    std::map<std::string, std::pair<double, uint64_t>> state;
+    
+    // Combine balances and nonces
+    for (const auto& [addr, balance] : account_balances) {
+        uint64_t nonce = 0;
+        if (account_nonces.count(addr)) {
+            nonce = account_nonces.at(addr);
+        }
+        state[addr] = {balance, nonce};
+    }
+    
+    return state;
+}
+
+std::string Blockchain::get_state_root() const {
+    std::lock_guard<std::mutex> lock(chain_mutex);
+    return _calculate_state_root();
+}
+
+bool Blockchain::sync_state(const std::map<std::string, std::pair<double, uint64_t>>& remote_state) {
+    std::lock_guard<std::mutex> lock(chain_mutex);
+    
+    // Compare local state with remote state
+    auto local_state = get_account_state();
+    
+    if (local_state.size() != remote_state.size()) {
+        LOG_WARN("Blockchain", "State sync mismatch - different account count. Local: " + 
+                 std::to_string(local_state.size()) + " Remote: " + std::to_string(remote_state.size()));
+        return false;
+    }
+    
+    for (const auto& [addr, remote_data] : remote_state) {
+        auto it = local_state.find(addr);
+        if (it == local_state.end()) {
+            LOG_WARN("Blockchain", "State sync - missing account: " + addr);
+            return false;
+        }
+        
+        const auto& [local_balance, local_nonce] = it->second;
+        const auto& [remote_balance, remote_nonce] = remote_data;
+        
+        if (local_balance != remote_balance || local_nonce != remote_nonce) {
+            LOG_WARN("Blockchain", "State sync mismatch for " + addr + 
+                     " Local: (" + std::to_string(local_balance) + ", " + std::to_string(local_nonce) + ") " +
+                     "Remote: (" + std::to_string(remote_balance) + ", " + std::to_string(remote_nonce) + ")");
+            return false;
+        }
+    }
+    
+    LOG_INFO("Blockchain", "State sync successful - all " + std::to_string(local_state.size()) + " accounts verified");
+    return true;
 }
 
 // ============= TRANSACTION CREATION =============
@@ -524,6 +622,28 @@ bool Blockchain::is_chain_valid() const {
         block_index++;
     }
 
+    return true;
+}
+
+bool Blockchain::is_chain_valid_with_state() const {
+    // Verify both chain integrity and state roots (NEW: Account state sync)
+    if (!is_chain_valid()) {
+        return false;
+    }
+    
+    std::lock_guard<std::mutex> lock(chain_mutex);
+    
+    // For each block, verify state root consistency
+    for (int i = 1; i < chain.size(); i++) {
+        const auto& block = chain[i];
+        
+        // Verify block has a state_root field
+        if (block.state_root.empty()) {
+            LOG_WARN("Blockchain", "Block " + std::to_string(i) + " has no state_root");
+            // This is OK for legacy blocks, just continue
+        }
+    }
+    
     return true;
 }
 

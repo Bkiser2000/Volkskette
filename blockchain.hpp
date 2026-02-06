@@ -95,7 +95,8 @@ struct Block {
     int index;
     std::string timestamp;
     std::vector<Transaction> transactions;
-    std::string merkle_root;
+    std::string merkle_root;           // Merkle root of transactions
+    std::string state_root;            // Merkle root of account state (NEW: Account sync)
     long long proof;
     std::string previous_hash;
 
@@ -108,6 +109,7 @@ struct Block {
             j["transactions"].push_back(tx.to_json());
         }
         j["merkle_root"] = merkle_root;
+        j["state_root"] = state_root;
         j["proof"] = proof;
         j["previous_hash"] = previous_hash;
         return j;
@@ -152,6 +154,11 @@ private:
     std::string sha256(const std::string& str) const;
 
     std::string _calculate_merkle_root(const std::vector<Transaction>& transactions) const;
+    
+    // Account state synchronization (NEW)
+    std::string _calculate_state_root() const;
+    std::map<std::string, double> account_state_snapshot;  // State snapshot for verification
+    mutable std::mutex state_mutex;  // Protect state operations
 
     int _calculate_difficulty() const;
 
@@ -160,6 +167,8 @@ private:
     bool _verify_ecdsa_signature(const Transaction& tx) const;
 
     bool _validate_transaction(const Transaction& tx) const;
+    
+    bool _verify_state_root(const std::string& calculated_root, const std::string& block_root) const;
 
     bool _has_sufficient_balance(const std::string& address, double amount) const;
 
@@ -177,6 +186,11 @@ public:
     double get_balance(const std::string& address) const;
 
     std::map<std::string, double> get_all_balances() const;
+    
+    // Get complete account state for synchronization (NEW)
+    std::map<std::string, std::pair<double, uint64_t>> get_account_state() const;
+    std::string get_state_root() const;
+    bool sync_state(const std::map<std::string, std::pair<double, uint64_t>>& remote_state);
 
     uint64_t get_account_nonce(const std::string& address) const;
 
@@ -206,6 +220,8 @@ public:
     Block get_previous_block() const;
 
     bool is_chain_valid() const;
+    
+    bool is_chain_valid_with_state() const;  // Verify both chain and state roots
 
     std::vector<Block> get_chain() const;
 

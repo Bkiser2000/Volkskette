@@ -202,17 +202,55 @@ int main() {
                      << "Charlie=" << charlie_bal << "\n";
         }
         
+        // ===== Test 6.5: State Root Synchronization =====
+        print_header("Test 6.5: Account State Root Verification");
+        
+        std::cout << "Verifying state roots (deterministic hash of all account state):\n";
+        
+        std::string alice_state_root = node1->get_blockchain().get_state_root();
+        std::string bob_state_root = node2->get_blockchain().get_state_root();
+        std::string charlie_state_root = node3->get_blockchain().get_state_root();
+        
+        std::cout << "   Alice state root:   " << alice_state_root.substr(0, 16) << "...\n";
+        std::cout << "   Bob state root:     " << bob_state_root.substr(0, 16) << "...\n";
+        std::cout << "   Charlie state root: " << charlie_state_root.substr(0, 16) << "...\n";
+        
+        bool state_sync = (alice_state_root == bob_state_root && bob_state_root == charlie_state_root);
+        std::cout << "\n   State Synchronization: " << (state_sync ? "✅ ALL NODES IN SYNC" : "⚠ NODES OUT OF SYNC") << "\n";
+        
+        if (!state_sync) {
+            std::cout << "\n   ⚠ State Mismatch Details:\n";
+            std::cout << "   Alice vs Bob: " << (alice_state_root == bob_state_root ? "MATCH" : "MISMATCH") << "\n";
+            std::cout << "   Bob vs Charlie: " << (bob_state_root == charlie_state_root ? "MATCH" : "MISMATCH") << "\n";
+            std::cout << "   Alice vs Charlie: " << (alice_state_root == charlie_state_root ? "MATCH" : "MISMATCH") << "\n";
+        }
+        
+        // Verify state_root is embedded in blocks
+        std::cout << "\n   Verifying state_root fields in blocks:\n";
+        bool blocks_have_state_root = true;
+        for (size_t i = 1; i < alice_chain.size(); i++) {
+            if (alice_chain[i].state_root.empty()) {
+                blocks_have_state_root = false;
+                std::cout << "   ⚠ Block " << i << " missing state_root\n";
+            }
+        }
+        if (blocks_have_state_root && alice_chain.size() > 1) {
+            std::cout << "   ✅ All blocks contain state_root fields\n";
+        }
+        
         // Final status
         print_header("Demo Summary");
         
         std::cout << "✅ Multi-Node Consensus: " << (consensus ? "WORKING" : "NEEDS WORK") << "\n";
         std::cout << "✅ Network Synchronization: " << (network->is_network_synced() ? "SYNCED" : "OUT OF SYNC") << "\n";
         std::cout << "✅ Chain Validation: " << (alice_valid && bob_valid && charlie_valid ? "VALID" : "INVALID") << "\n";
+        std::cout << "✅ Account State Sync: " << (state_sync ? "SYNCHRONIZED" : "OUT OF SYNC") << "\n";
         
         std::cout << "\n📊 Final Network Statistics:\n";
         std::cout << "   Total Blocks: " << alice_chain.size() << "\n";
         std::cout << "   Total Accounts: " << all_accounts.size() << "\n";
         std::cout << "   Peers Connected: " << node1->get_peers().size() << "\n";
+        std::cout << "   State Root (Alice): " << alice_state_root.substr(0, 12) << "...\n";
         
         // Cleanup
         print_header("Shutting Down");
