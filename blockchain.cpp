@@ -267,6 +267,9 @@ bool Blockchain::_verify_state_root(const std::string& calculated_root, const st
     return true;
 }
 
+// ============= ADVANCED BLOCK VALIDATION (Phase 5) =============
+// Note: Implementation functions are defined below (see _verify_block_merkle_root, etc.)
+
 void Blockchain::_update_balances(const std::vector<Transaction>& transactions) {
     for (const auto& tx : transactions) {
         account_balances[tx.from] -= (tx.amount + tx.gas_price);
@@ -579,7 +582,171 @@ Block Blockchain::mine_block(int max_transactions) {
     return block;
 }
 
-// ============= VALIDATION =============
+// ============= ADVANCED BLOCK VALIDATION (PHASE 5) =============
+
+bool Blockchain::_verify_block_merkle_root(const Block& block) const {
+    std::string calculated_merkle = _calculate_merkle_root(block.transactions);
+    if (block.merkle_root != calculated_merkle) {
+        LOG_WARN("Blockchain", "Block " + std::to_string(block.index) + 
+                 " merkle root mismatch: expected " + calculated_merkle.substr(0, 16) +
+                 " got " + block.merkle_root.substr(0, 16));
+        return false;
+    }
+    return true;
+}
+
+bool Blockchain::_verify_block_timestamp(const Block& block, const Block& previous_block) const {
+    // Parse timestamps
+    auto parse_time = [](const std::string& timestamp_str) -> int64_t {
+        // Format: "2026-02-06 03:30:09"
+        std::tm tm = {};
+        std::istringstream ss(timestamp_str);
+        ss >> std::get_time(&tm, "%Y-%m-%d %H:%M:%S");
+        return std::mktime(&tm);
+    };
+    
+    try {
+        int64_t prev_time = parse_time(previous_block.timestamp);
+        int64_t block_time = parse_time(block.timestamp);
+        int64_t current_time = std::time(nullptr);
+        
+        // 1. Block timestamp must be after previous block
+        if (block_time <= prev_time) {
+            LOG_WARN("Blockchain", "Block " + std::to_string(block.index) + 
+                     " timestamp not after previous block");
+            return false;
+        }
+        
+        // 2. Block timestamp must not be too far in the future
+        if (block_time > current_time + MAX_BLOCK_FUTURE_TIME) {
+            LOG_WARN("Blockchain", "Block " + std::to_string(block.index) + 
+                     " timestamp too far in future");
+            return false;
+        }
+        
+        // 3. Block must respect minimum time between blocks
+        if (block_time - prev_time < MIN_BLOCK_TIME) {
+            LOG_WARN("Blockchain", "Block " + std::to_string(block.index) + 
+                     " time delta too small (" + std::to_string(block_time - prev_time) + "s)");
+            return false;
+        }
+        
+        return true;
+    } catch (...) {
+        LOG_WARN("Blockchain", "Block " + std::to_string(block.index) + 
+                 " timestamp parsing failed");
+        return false;
+    }
+}
+
+bool Blockchain::_verify_transaction_nonce_ordering(const Block& block) const {
+    // Verify that transactions are ordered by nonce per sender
+    std::map<std::string, uint64_t> expected_nonces;
+    
+    for (size_t i = 0; i < block.transactions.size(); i++) {
+        const auto& tx = block.transactions[i];
+        
+        auto it = expected_nonces.find(tx.from);
+        if (it == expected_nonces.end()) {
+            // First transaction from this sender must have nonce 0 or account's current nonce
+            auto account_it = account_nonces.find(tx.from);
+            uint64_t expected = account_it == account_nonces.end() ? 0 : account_it->second + 1;
+            
+            if (tx.nonce != expected) {
+                LOG_WARN("Blockchain", "Block " + std::to_string(block.index) + 
+                         " tx " + std::to_string(i) + " has unexpected nonce " +
+                         std::to_string(tx.nonce) + " (expected " + std::to_string(expected) + ")");
+                return false;
+            }
+            expected_nonces[tx.from] = expected;
+        } else {
+            // Subsequent transactions must be nonce+1
+            uint64_t expected = it->second + 1;
+            if (tx.nonce != expected) {
+                LOG_WARN("Blockchain", "Block " + std::to_string(block.index) + 
+                         " tx " + std::to_string(i) + " has invalid nonce sequence");
+                return false;
+            }
+            it->second = expected;
+        }
+    }
+    
+    return true;
+}
+
+bool Blockchain::_verify_block_difficulty(const Block& block) const {
+    // Check if this is a retarget block
+    if (block.index > 1 && block.index % DIFFICULTY_RETARGET_INTERVAL == 0) {
+        // This block should have adjusted difficulty
+        // For now, just verify the proof meets some minimum difficulty
+        std::string target(4, '0');  // Minimum: 4 leading zeros
+        long long prev_proof = (block.index > 1) ? chain[block.index - 1].proof : 1;
+        std::string to_digest = _to_digest(block.proof, prev_proof, block.index, block.merkle_root);
+        std::string hash_result = sha256(to_digest);
+        
+        if (hash_result.substr(0, 4) != target) {
+            LOG_WARN("Blockchain", "Block " + std::to_string(block.index) + 
+                     " does not meet minimum difficulty");
+            return false;
+        }
+    } else {
+        // Regular block: verify proof meets difficulty
+        long long prev_proof = (block.index > 1) ? chain[block.index - 1].proof : 1;
+        std::string to_digest = _to_digest(block.proof, prev_proof, block.index, block.merkle_root);
+        std::string hash_result = sha256(to_digest);
+        
+        std::string target(4, '0');
+        if (hash_result.substr(0, 4) != target) {
+            LOG_WARN("Blockchain", "Block " + std::to_string(block.index) + 
+                     " proof of work invalid");
+            return false;
+        }
+    }
+    
+    return true;
+}
+
+bool Blockchain::_validate_block_advanced(const Block& block, const Block& previous_block) const {
+    // Comprehensive block validation (Phase 5)
+    
+    // 1. Verify merkle root
+    if (!_verify_block_merkle_root(block)) {
+        LOG_WARN("Blockchain", "Block " + std::to_string(block.index) + " failed merkle verification");
+        return false;
+    }
+    
+    // 2. Verify timestamp
+    if (!_verify_block_timestamp(block, previous_block)) {
+        LOG_WARN("Blockchain", "Block " + std::to_string(block.index) + " failed timestamp verification");
+        return false;
+    }
+    
+    // 3. Verify transaction nonce ordering
+    if (!_verify_transaction_nonce_ordering(block)) {
+        LOG_WARN("Blockchain", "Block " + std::to_string(block.index) + " failed nonce ordering verification");
+        return false;
+    }
+    
+    // 4. Verify difficulty
+    if (!_verify_block_difficulty(block)) {
+        LOG_WARN("Blockchain", "Block " + std::to_string(block.index) + " failed difficulty verification");
+        return false;
+    }
+    
+    // 5. Verify state root if present
+    if (!block.state_root.empty()) {
+        std::string calculated_state_root = _calculate_state_root();
+        if (!_verify_state_root(calculated_state_root, block.state_root)) {
+            LOG_WARN("Blockchain", "Block " + std::to_string(block.index) + " failed state root verification");
+            return false;
+        }
+    }
+    
+    LOG_INFO("Blockchain", "Block " + std::to_string(block.index) + " passed advanced validation ✓");
+    return true;
+}
+
+// ============= VALIDATION ============="
 bool Blockchain::is_chain_valid() const {
     std::lock_guard<std::mutex> lock(chain_mutex);
     
@@ -591,30 +758,15 @@ bool Blockchain::is_chain_valid() const {
     while (block_index < chain.size()) {
         Block block = chain[block_index];
 
+        // Check hash linkage
         if (block.previous_hash != _hash(previous_block)) {
+            LOG_WARN("Blockchain", "Block " + std::to_string(block.index) + " previous hash mismatch");
             return false;
         }
 
-        std::string calculated_merkle = _calculate_merkle_root(block.transactions);
-        if (block.merkle_root != calculated_merkle) {
-            return false;
-        }
-
-        long long previous_proof = previous_block.proof;
-        int index = block.index;
-        
-        std::string tx_data;
-        for (const auto& tx : block.transactions) {
-            tx_data += tx.to_json().dump();
-        }
-        
-        long long proof = block.proof;
-
-        std::string to_digest = _to_digest(proof, previous_proof, index, tx_data);
-        std::string hash_operation = sha256(to_digest);
-
-        std::string target(4, '0');
-        if (hash_operation.substr(0, 4) != target) {
+        // Use advanced validation (Phase 5)
+        if (!_validate_block_advanced(block, previous_block)) {
+            LOG_WARN("Blockchain", "Block " + std::to_string(block.index) + " failed advanced validation");
             return false;
         }
 
@@ -622,6 +774,7 @@ bool Blockchain::is_chain_valid() const {
         block_index++;
     }
 
+    LOG_INFO("Blockchain", "Chain validation PASSED ✓ - All " + std::to_string(chain.size()) + " blocks valid");
     return true;
 }
 

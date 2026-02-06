@@ -77,6 +77,12 @@ struct Transaction {
 const double BLOCK_REWARD = 50.0;
 const double GAS_REWARD_PERCENTAGE = 0.9;
 
+// Advanced Validation Constants (Phase 5)
+const int64_t MAX_BLOCK_FUTURE_TIME = 3600;  // 1 hour: don't accept blocks from too far in future
+const int64_t MIN_BLOCK_TIME = 5;             // 5 seconds: minimum time between blocks
+const int DIFFICULTY_RETARGET_INTERVAL = 10;  // Retarget every 10 blocks
+const int64_t TARGET_BLOCK_TIME = 10;         // 10 seconds: target time between blocks
+
 struct MinerStats {
     std::string address;
     long long blocks_mined = 0;
@@ -173,6 +179,13 @@ private:
     bool _has_sufficient_balance(const std::string& address, double amount) const;
 
     bool _check_replay_protection(const Transaction& tx) const;
+    
+    // Advanced Block Validation (Phase 5)
+    bool _verify_block_merkle_root(const Block& block) const;
+    bool _verify_block_timestamp(const Block& block, const Block& previous_block) const;
+    bool _verify_transaction_nonce_ordering(const Block& block) const;
+    bool _verify_block_difficulty(const Block& block) const;
+    bool _validate_block_advanced(const Block& block, const Block& previous_block) const;
 
     void _update_balances(const std::vector<Transaction>& transactions);
 
