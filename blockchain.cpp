@@ -1121,3 +1121,9 @@ bool Blockchain::load_blockchain_state() {
         return false;
     }
 }
+
+// ============= RPC INTERFACE (Phase 6) =============
+
+std::string Blockchain::hash_block(const Block& block) const {
+    return _hash(block);
+}

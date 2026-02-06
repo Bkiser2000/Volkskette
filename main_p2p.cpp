@@ -1,4 +1,5 @@
 #include "network_manager.hpp"
+#include "rpc_server.hpp"
 #include "utils/logger.hpp"
 #include <iostream>
 #include <thread>
@@ -67,6 +68,17 @@ int main() {
         std::cout << "🚀 Starting all nodes...\n";
         network->start_all_nodes();
         std::this_thread::sleep_for(std::chrono::seconds(2));
+        
+        // Start JSON-RPC server (Phase 6)
+        print_header("JSON-RPC Interface");
+        std::cout << "🌐 Starting JSON-RPC server...\n";
+        auto rpc_server = std::make_unique<RPCServer>(8080, &node1->get_blockchain(), network.get());
+        rpc_server->start();
+        std::cout << "✓ JSON-RPC server listening on http://localhost:8080\n";
+        std::cout << "   Health check: GET  http://localhost:8080/health\n";
+        std::cout << "   API endpoint: POST http://localhost:8080/ (JSON-RPC 2.0)\n";
+        std::cout << "   Example: curl -X POST http://localhost:8080/ -H 'Content-Type: application/json' \\\n";
+        std::cout << "     -d '{\"jsonrpc\": \"2.0\", \"method\": \"eth_blockNumber\", \"params\": [], \"id\": 1}'\n\n";
         
         print_network_status(network.get());
         

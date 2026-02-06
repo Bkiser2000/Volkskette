@@ -247,6 +247,10 @@ public:
 
     size_t get_mempool_size() const;
     
+    // RPC Interface methods (Phase 6)
+    int get_difficulty() const { return difficulty; }
+    std::string hash_block(const Block& block) const;
+    
     // Contract management
     ContractManager& get_contract_manager() { return contract_manager_; }
     const ContractManager& get_contract_manager() const { return contract_manager_; }

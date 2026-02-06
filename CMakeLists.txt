@@ -11,7 +11,7 @@ find_package(OpenSSL REQUIRED)
 include_directories(${CMAKE_SOURCE_DIR}/include)
 
 # Create the blockchain library
-add_library(blockchain blockchain.cpp node.cpp contract.cpp persistent_store.cpp utils/logger.cpp network_manager.cpp)
+add_library(blockchain blockchain.cpp node.cpp contract.cpp persistent_store.cpp utils/logger.cpp network_manager.cpp rpc_server.cpp)
 target_link_libraries(blockchain PRIVATE OpenSSL::Crypto pthread)
 target_include_directories(blockchain PUBLIC ${CMAKE_SOURCE_DIR})
 
